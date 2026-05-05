@@ -31,8 +31,8 @@ fi
 
 echo "📥 Installing dependencies..."
 source "$VENV_PATH/bin/activate"
-pip install --upgrade pip setuptools wheel --quiet
-pip install -r requirements.txt --quiet
+"$VENV_PATH/bin/pip" install --upgrade pip
+"$VENV_PATH/bin/pip" install -r "$APP_DIR/requirements.txt"
 echo "✓ Dependencies installed"
 
 echo "📂 Setting up directories..."
