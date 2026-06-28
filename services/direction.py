@@ -10,7 +10,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('/var/log/opsell/direction_service.log'),
+        logging.FileHandler('direction_service.log'),
         logging.StreamHandler(sys.stdout)
     ]
 )
@@ -52,7 +52,7 @@ class MarketClassificationResponse(BaseModel):
     price_move_pct: float
     vix_change: float
     premium_change_pct: float
-    timestamp: str = None
+    timestamp: str = ""
 
 
 def classify_market(open_price: float, current_price: float, vix_open: float, 
