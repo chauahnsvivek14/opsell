@@ -1,8 +1,8 @@
 import os
-import socket
 import threading
 import time
 import webbrowser
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -30,29 +30,20 @@ class OAuthCallbackHandler(BaseHTTPRequestHandler):
         return
 
 
-def find_free_port(start_port=8000):
-    for port in range(start_port, start_port + 20):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            try:
-                s.bind(("0.0.0.0", port))
-                return port
-            except OSError:
-                continue
-    raise RuntimeError("No free port available")
+def get_public_ip():
+    try:
+        return urllib.request.urlopen("https://api.ipify.org", timeout=5).read().decode().strip()
+    except Exception:
+        return "127.0.0.1"
 
 
 def start_callback_server(preferred_redirect_uri):
     parsed = urlparse(preferred_redirect_uri)
-    host = parsed.hostname or "127.0.0.1"
-    port = parsed.port or 8000
+    host = parsed.hostname or "0.0.0.0"
+    port = parsed.port or 8001
 
-    try:
-        server = ThreadingHTTPServer((host, port), OAuthCallbackHandler)
-    except OSError:
-        port = find_free_port(port + 1)
-        server = ThreadingHTTPServer((host, port), OAuthCallbackHandler)
-
-    server.redirect_uri = f"http://{host}:{server.server_address[1]}"
+    server = ThreadingHTTPServer(("0.0.0.0", port), OAuthCallbackHandler)
+    server.redirect_uri = preferred_redirect_uri
     return server
 
 
@@ -65,18 +56,23 @@ def wait_for_auth_code(server, auth_url):
 
     print(f"Using redirect URI: {server.redirect_uri}")
     print(auth_url)
-    webbrowser.open(auth_url, new=1)
 
-    deadline = time.time() + 120
+    try:
+        webbrowser.open(auth_url, new=1)
+    except Exception:
+        pass
+
+    deadline = time.time() + 180
     while time.time() < deadline:
         if server.received_code:
-            return server.auth_code, server.redirect_uri
+            return server.auth_code
         time.sleep(0.5)
 
     raise TimeoutError("Timed out waiting for the Fyers redirect.")
 
 
-preferred_redirect_uri = os.getenv("FYERS_REDIRECT_URI", "http://127.0.0.1:8000")
+public_ip = get_public_ip()
+preferred_redirect_uri = os.getenv("FYERS_REDIRECT_URI", f"http://{public_ip}:8001")
 server = start_callback_server(preferred_redirect_uri)
 
 appSession = fyersModel.SessionModel(
@@ -89,14 +85,15 @@ appSession = fyersModel.SessionModel(
 )
 
 generateTokenUrl = appSession.generate_authcode()
-auth_code, actual_redirect_uri = wait_for_auth_code(server, generateTokenUrl)
+auth_code = wait_for_auth_code(server, generateTokenUrl)
 
-print(f"Captured auth code from redirect URI: {actual_redirect_uri}")
-appSession.set_token(auth_code)
-response = appSession.generate_token()
+print(f"Captured auth code: {auth_code}")
 
-if response.get("s") != "ok":
-    raise RuntimeError(f"Fyers token request failed: {response}")
+response = fyersModel.request_access_token(
+    auth_code=auth_code,
+    client_id=client_id,
+    secret_key=secret_key,
+    redirect_uri=server.redirect_uri,
+)
 
-print("Access token received successfully.")
 print(response)
