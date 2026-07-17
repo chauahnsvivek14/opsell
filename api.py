@@ -1,13 +1,64 @@
 from fyers_apiv3 import fyersModel
 import webbrowser
 import sys
+import os
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
-redirect_uri = "http://127.0.0.1"
+redirect_uri = os.getenv("FYERS_REDIRECT_URI", "http://127.0.0.1:8000")
 client_id = "7ASRZNCBRY-100"
 secret_key = "80C9W7CV4S"
 grant_type = "authorization_code"
 response_type = "code"
 state = "sample"
+
+
+class OAuthCallbackHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        code = parse_qs(parsed.query).get("code", [""])[0]
+        self.server.auth_code = code
+        self.server.received_code = True
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"Authorization complete. You can close this window.")
+
+    def log_message(self, format, *args):
+        return
+
+
+def wait_for_auth_code(auth_url: str, redirect_uri_value: str) -> str:
+    parsed = urlparse(redirect_uri_value)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 8000
+
+    server = ThreadingHTTPServer((host, port), OAuthCallbackHandler)
+    server.auth_code = ""
+    server.received_code = False
+
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    print(auth_url)
+    webbrowser.open(auth_url, new=1)
+
+    timeout_seconds = 120
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        if server.received_code:
+            code = server.auth_code.strip()
+            server.shutdown()
+            server.server_close()
+            return code
+        time.sleep(0.5)
+
+    server.shutdown()
+    server.server_close()
+    return ""
+
 
 appSession = fyersModel.SessionModel(
     client_id=client_id,
@@ -19,10 +70,12 @@ appSession = fyersModel.SessionModel(
 )
 
 generateTokenUrl = appSession.generate_authcode()
+auth_code = wait_for_auth_code(generateTokenUrl, redirect_uri)
 
-print(generateTokenUrl)
-webbrowser.open(generateTokenUrl, new=1)
-auth_code ="vivekchauhan14"
+if not auth_code:
+    print("Timed out waiting for the Fyers redirect. Make sure your redirect URI matches the one registered in the Fyers app dashboard.")
+    sys.exit(1)
+
 appSession.set_token(auth_code)
 response = appSession.generate_token()
 
