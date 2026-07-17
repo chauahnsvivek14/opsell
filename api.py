@@ -30,18 +30,30 @@ class OAuthCallbackHandler(BaseHTTPRequestHandler):
         return
 
 
-def wait_for_auth_code(auth_url: str, redirect_uri_value: str) -> str:
+def wait_for_auth_code(auth_url: str, redirect_uri_value: str) -> tuple[str, str]:
     parsed = urlparse(redirect_uri_value)
     host = parsed.hostname or "127.0.0.1"
     port = parsed.port or 8000
 
-    server = ThreadingHTTPServer((host, port), OAuthCallbackHandler)
+    server = None
+    for candidate_port in [port, 8001, 8002, 8003, 8004, 8005]:
+        try:
+            server = ThreadingHTTPServer((host, candidate_port), OAuthCallbackHandler)
+            break
+        except OSError:
+            continue
+
+    if server is None:
+        raise RuntimeError("Could not start a local callback server on any available port")
+
     server.auth_code = ""
     server.received_code = False
 
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 
+    actual_redirect_uri = f"http://{host}:{server.server_address[1]}"
+    print(f"Using redirect URI: {actual_redirect_uri}")
     print(auth_url)
     webbrowser.open(auth_url, new=1)
 
@@ -52,12 +64,12 @@ def wait_for_auth_code(auth_url: str, redirect_uri_value: str) -> str:
             code = server.auth_code.strip()
             server.shutdown()
             server.server_close()
-            return code
+            return code, actual_redirect_uri
         time.sleep(0.5)
 
     server.shutdown()
     server.server_close()
-    return ""
+    return "", actual_redirect_uri
 
 
 appSession = fyersModel.SessionModel(
@@ -70,12 +82,13 @@ appSession = fyersModel.SessionModel(
 )
 
 generateTokenUrl = appSession.generate_authcode()
-auth_code = wait_for_auth_code(generateTokenUrl, redirect_uri)
+auth_code, actual_redirect_uri = wait_for_auth_code(generateTokenUrl, redirect_uri)
 
 if not auth_code:
     print("Timed out waiting for the Fyers redirect. Make sure your redirect URI matches the one registered in the Fyers app dashboard.")
     sys.exit(1)
 
+print(f"Captured auth code from redirect URI: {actual_redirect_uri}")
 appSession.set_token(auth_code)
 response = appSession.generate_token()
 
