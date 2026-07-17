@@ -22,7 +22,7 @@ generateTokenUrl = appSession.generate_authcode()
 
 print(generateTokenUrl)
 webbrowser.open(generateTokenUrl, new=1)
-auth_code = input("Enter the auth code from the redirected URL: ").strip()
+auth_code ="vivekchauhan14"
 appSession.set_token(auth_code)
 response = appSession.generate_token()
 
