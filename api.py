@@ -1,29 +1,43 @@
 from fyers_apiv3 import fyersModel
 import webbrowser
+import sys
 
-redirect_uri= "http://127.0.0.1"  
-client_id = "7ASRZNCBRY-100"                       
-secret_key = "80C9W7CV4S"                          
-grant_type = "authorization_code"                  
-response_type = "code"                             
-state = "sample"                                   
+redirect_uri = "http://127.0.0.1"
+client_id = "7ASRZNCBRY-100"
+secret_key = "80C9W7CV4S"
+grant_type = "authorization_code"
+response_type = "code"
+state = "sample"
 
-appSession = fyersModel.SessionModel(client_id = client_id, redirect_uri = redirect_uri,response_type=response_type,state=state,secret_key=secret_key,grant_type=grant_type)
+appSession = fyersModel.SessionModel(
+    client_id=client_id,
+    redirect_uri=redirect_uri,
+    response_type=response_type,
+    state=state,
+    secret_key=secret_key,
+    grant_type=grant_type,
+)
+
 generateTokenUrl = appSession.generate_authcode()
 
-print((generateTokenUrl))  
-webbrowser.open(generateTokenUrl,new=1)
-auth_code = input("Enter the auth code from the redirected URL: ")
+print(generateTokenUrl)
+webbrowser.open(generateTokenUrl, new=1)
+auth_code = input("Enter the auth code from the redirected URL: ").strip()
 appSession.set_token(auth_code)
 response = appSession.generate_token()
 
-try: 
-    access_token = response["access_token"]
-    print("access_token : ",access_token)
-except Exception as e:
-    print(e,response)  ## This will help you in debugging then and there itself like what was the error and also you would be able to see the value you got in response variable. instead of getting key_error for unsuccessfull response.
+if response.get("s") != "ok":
+    print("Fyers auth failed:", response)
+    sys.exit(1)
 
-fyers = fyersModel.FyersModel(token=access_token,is_async=False,client_id=client_id,log_path="")
+try:
+    access_token = response["access_token"]
+    print("access_token:", access_token)
+except Exception as e:
+    print("Failed to extract access token:", e, response)
+    sys.exit(1)
+
+fyers = fyersModel.FyersModel(token=access_token, is_async=False, client_id=client_id, log_path="")
 
 '''
 ## Once you have generated accessToken now we can call multiple trading related or data related apis after that in order to do so we need to first initialize the fyerModel object with all the requried params.
