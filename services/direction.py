@@ -1,16 +1,24 @@
 import logging
-from typing import Dict
+from typing import Dict, Optional, Any
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 import os
 import sys
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+import json
+
+try:
+    from fyers_apiv3 import fyersModel
+except Exception:  # pragma: no cover - optional runtime dependency
+    fyersModel = None
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('/var/log/opsell/direction_service.log'),
+        logging.FileHandler('direction_service.log'),
         logging.StreamHandler(sys.stdout)
     ]
 )
@@ -52,7 +60,112 @@ class MarketClassificationResponse(BaseModel):
     price_move_pct: float
     vix_change: float
     premium_change_pct: float
-    timestamp: str = None
+    timestamp: str = ""
+
+
+def extract_atm_straddle_premium(option_chain_payload: Dict[str, Any], reference_price: Optional[float] = None) -> float:
+    """Extract ATM straddle premium from a Fyers option chain payload."""
+    records = option_chain_payload.get("data", [])
+    if isinstance(records, dict):
+        records = records.get("records", [])
+
+    if not records:
+        raise ValueError("No option-chain records returned by Fyers")
+
+    if reference_price is None:
+        reference_price = 0.0
+
+    best_record = None
+    best_diff = None
+
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+
+        strike = record.get("strikePrice")
+        if strike is None:
+            continue
+
+        try:
+            strike_value = float(strike)
+        except (TypeError, ValueError):
+            continue
+
+        diff = abs(strike_value - float(reference_price))
+        if best_diff is None or diff < best_diff:
+            best_diff = diff
+            best_record = record
+
+    if best_record is None:
+        raise ValueError("No valid option-chain strikes found")
+
+    ce = best_record.get("ce") or best_record.get("CE") or {}
+    pe = best_record.get("pe") or best_record.get("PE") or {}
+    ce_price = ce.get("ltp") or ce.get("lastPrice")
+    pe_price = pe.get("ltp") or pe.get("lastPrice")
+
+    if ce_price is None or pe_price is None:
+        raise ValueError("Could not resolve CE/PE prices for the ATM strike")
+
+    try:
+        return round(float(ce_price) + float(pe_price), 2)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Invalid CE/PE price returned by Fyers") from exc
+
+
+def get_fyers_atm_straddle_premium(fyers_client: Any, price: float, symbol: str = "NSE:NIFTY50-INDEX", expiry_timestamp: Optional[int] = None, strike_count: int = 10) -> float:
+    """Fetch the ATM straddle premium from Fyers option chain for the provided price level."""
+    if fyers_client is None:
+        raise RuntimeError("Fyers SDK is not available")
+
+    data = {"symbol": symbol, "strikecount": strike_count}
+    if expiry_timestamp is not None:
+        data["timestamp"] = expiry_timestamp
+
+    option_chain = fyers_client.optionchain(data)
+    return extract_atm_straddle_premium(option_chain, price)
+
+
+def get_915_candle_open_price(fyers_client: Any, symbol: str = "NSE:NIFTY50-INDEX") -> float:
+    """Get the opening price of the 09:15 1-minute candle from Fyers history."""
+    if fyers_client is None:
+        raise RuntimeError("Fyers SDK is not available")
+
+    today = datetime.now(ZoneInfo("Asia/Kolkata")).strftime("%Y-%m-%d")
+    history_payload = fyers_client.history({
+        "symbol": symbol,
+        "resolution": "1",
+        "date_format": 1,
+        "range_from": today,
+        "range_to": today,
+        "cont_flag": 0,
+    })
+
+    candles = []
+    if isinstance(history_payload, dict):
+        data_section = history_payload.get("data", {})
+        if isinstance(data_section, dict):
+            candles = data_section.get("candles", [])
+        else:
+            candles = history_payload.get("candles", [])
+
+    for candle in candles:
+        if not isinstance(candle, (list, tuple)) or len(candle) < 2:
+            continue
+
+        timestamp = candle[0]
+        try:
+            candle_dt = datetime.fromtimestamp(timestamp / 1000 if timestamp > 10**12 else timestamp, tz=timezone.utc).astimezone(ZoneInfo("Asia/Kolkata"))
+        except (OverflowError, OSError, ValueError):
+            continue
+
+        if candle_dt.hour == 9 and candle_dt.minute == 15:
+            return float(candle[1])
+
+    if candles and isinstance(candles[0], (list, tuple)) and len(candles[0]) >= 2:
+        return float(candles[0][1])
+
+    raise ValueError("No 09:15 candle data was found in Fyers history")
 
 
 def classify_market(open_price: float, current_price: float, vix_open: float, 
@@ -105,8 +218,82 @@ async def health_check():
     return {"status": "healthy", "service": "market-direction-classifier"}
 
 
+def get_fyers_market_inputs(fyers_client: Any, *, symbol: str = "NSE:NIFTY50-INDEX", expiry_timestamp: Optional[int] = None) -> Dict[str, Any]:
+    """Build the inputs required by classify_market using Fyers market and option-chain data."""
+    if fyers_client is None:
+        raise RuntimeError("Fyers SDK is not available")
+
+    quotes = fyers_client.quotes({"symbols": [symbol]})
+    quote_payload = quotes.get("data", []) if isinstance(quotes, dict) else []
+    if not quote_payload:
+        raise ValueError("No market quotes returned by Fyers")
+
+    market_data = quote_payload[0] if isinstance(quote_payload, list) else quote_payload
+    open_price = market_data.get("open") or market_data.get("dayOpen") or market_data.get("prevClose")
+    current_price = market_data.get("lp") or market_data.get("lastPrice") or market_data.get("ltp") or market_data.get("close")
+
+    if open_price is None or current_price is None:
+        raise ValueError("Could not resolve index price data from Fyers quotes")
+
+    vix_symbol = "NSE_INDEX:VIX"
+    vix_quotes = fyers_client.quotes({"symbols": [vix_symbol]})
+    vix_payload = vix_quotes.get("data", []) if isinstance(vix_quotes, dict) else []
+    if not vix_payload:
+        raise ValueError("No VIX quotes returned by Fyers")
+
+    vix_market_data = vix_payload[0] if isinstance(vix_payload, list) else vix_payload
+    vix_open = vix_market_data.get("open") or vix_market_data.get("dayOpen")
+    vix_now = vix_market_data.get("lp") or vix_market_data.get("lastPrice") or vix_market_data.get("ltp") or vix_market_data.get("close")
+
+    if vix_open is None or vix_now is None:
+        raise ValueError("Could not resolve VIX data from Fyers quotes")
+
+    opening_price_for_day = get_915_candle_open_price(fyers_client, symbol=symbol)
+    straddle_open = get_fyers_atm_straddle_premium(
+        fyers_client,
+        price=float(opening_price_for_day),
+        symbol=symbol,
+        expiry_timestamp=expiry_timestamp,
+        strike_count=10,
+    )
+    straddle_now = get_fyers_atm_straddle_premium(
+        fyers_client,
+        price=float(current_price),
+        symbol=symbol,
+        expiry_timestamp=expiry_timestamp,
+        strike_count=10,
+    )
+
+    return {
+        "open_price": float(opening_price_for_day),
+        "current_price": float(current_price),
+        "vix_open": float(vix_open),
+        "vix_now": float(vix_now),
+        "straddle_open": float(straddle_open),
+        "straddle_now": float(straddle_now),
+    }
+
+
+def _build_fyers_client() -> Any:
+    """Create a Fyers client from environment variables when available."""
+    if fyersModel is None:
+        raise RuntimeError("Fyers SDK is not available")
+
+    client_id = os.getenv("FYERS_CLIENT_ID")
+    access_token = os.getenv("FYERS_ACCESS_TOKEN")
+    if not client_id or not access_token:
+        raise RuntimeError("FYERS_CLIENT_ID and FYERS_ACCESS_TOKEN must be set")
+
+    return fyersModel.FyersModel(
+        token=access_token,
+        is_async=False,
+        client_id=client_id,
+        log_path="",
+    )
+
+
 @app.post("/classify", response_model=MarketClassificationResponse, tags=["Classification"])
-async def classify_endpoint(request: MarketDataRequest) -> MarketClassificationResponse:
+async def classify_endpoint(request: Optional[MarketDataRequest] = None) -> MarketClassificationResponse:
     """
     Classify market conditions based on provided market data
     
@@ -118,23 +305,34 @@ async def classify_endpoint(request: MarketDataRequest) -> MarketClassificationR
     - **straddle_now**: Current straddle premium
     """
     try:
-        logger.info(f"Received classification request: {request}")
-        
-        result = classify_market(
-            open_price=request.open_price,
-            current_price=request.current_price,
-            vix_open=request.vix_open,
-            vix_now=request.vix_now,
-            straddle_open=request.straddle_open,
-            straddle_now=request.straddle_now
-        )
-        
-        from datetime import datetime
+        logger.info("Received classification request")
+
+        if request is None:
+            fyers_client = _build_fyers_client()
+            market_inputs = get_fyers_market_inputs(fyers_client)
+            result = classify_market(
+                open_price=market_inputs["open_price"],
+                current_price=market_inputs["current_price"],
+                vix_open=market_inputs["vix_open"],
+                vix_now=market_inputs["vix_now"],
+                straddle_open=market_inputs["straddle_open"],
+                straddle_now=market_inputs["straddle_now"],
+            )
+        else:
+            result = classify_market(
+                open_price=request.open_price,
+                current_price=request.current_price,
+                vix_open=request.vix_open,
+                vix_now=request.vix_now,
+                straddle_open=request.straddle_open,
+                straddle_now=request.straddle_now
+            )
+
         response = MarketClassificationResponse(
             **result,
             timestamp=datetime.utcnow().isoformat()
         )
-        
+
         logger.info(f"Classification result: {response.classification}")
         return response
     

@@ -1,0 +1,6 @@
+2026-06-29 00:00:46,563 - __main__ - INFO - Starting Market Direction Classifier on 0.0.0.0:8000 with 4 workers
+2026-06-29 00:01:52,256 - __main__ - INFO - Received classification request: open_price=23945.45 current_price=24040.25 vix_open=19.3 vix_now=18.97 straddle_open=241.35 straddle_now=235.85
+2026-06-29 00:05:29,132 - __main__ - INFO - Received classification request: open_price=23945.45 current_price=24040.25 vix_open=19.3 vix_now=18.0 straddle_open=241.35 straddle_now=235.85
+2026-06-29 00:05:59,746 - __main__ - INFO - Received classification request: open_price=23945.45 current_price=24040.25 vix_open=19.3 vix_now=18.0 straddle_open=241.35 straddle_now=200.0
+2026-06-29 00:06:10,371 - __main__ - INFO - Received classification request: open_price=23945.45 current_price=24040.25 vix_open=19.3 vix_now=18.0 straddle_open=241.35 straddle_now=150.0
+2026-06-29 00:06:43,213 - __main__ - INFO - Received classification request: open_price=23945.45 current_price=24040.25 vix_open=19.3 vix_now=17.0 straddle_open=241.35 straddle_now=150.0

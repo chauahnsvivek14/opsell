@@ -28,6 +28,15 @@ sudo chown -R ubuntu:ubuntu /var/log/opsell
 
 ## Step 2: Deploy Application
 
+### Option A: Automated Deployment (Recommended)
+```bash
+# Copy deployment script to EC2, then run:
+bash /opt/opsell/deploy.sh
+```
+
+This handles everything: environment setup, dependencies, service configuration, and Nginx setup.
+
+### Option B: Manual Deployment
 ```bash
 # Navigate to app directory
 cd /opt/opsell
@@ -47,6 +56,13 @@ pip install -r requirements.txt
 
 ## Step 3: Configure Systemd Service
 
+### Quick Service Setup
+If you've already deployed the app files but need to set up the service:
+```bash
+bash /opt/opsell/setup-service.sh
+```
+
+### Manual Configuration
 ```bash
 # Copy systemd service file
 sudo cp opsell-direction.service /etc/systemd/system/
@@ -181,33 +197,14 @@ curl -X POST http://your-ec2-ip:8000/classify \
 
 ## Troubleshooting
 
-### Service won't start
-```bash
-sudo systemctl status opsell-direction.service
-sudo journalctl -u opsell-direction.service -n 50
-```
-
-### Port already in use
-```bash
-sudo lsof -i :8000
-sudo kill -9 <PID>
-```
-
-### Permission denied errors
-```bash
-sudo chown -R ubuntu:ubuntu /opt/opsell
-sudo chown -R ubuntu:ubuntu /var/log/opsell
-sudo chmod 755 /opt/opsell
-```
-
-### Update application
-```bash
-cd /opt/opsell
-git pull origin main  # or your branch
-source venv/bin/activate
-pip install -r requirements.txt
-sudo systemctl restart opsell-direction.service
-```
+See [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) for detailed solutions to common issues including:
+- `gunicorn: command not found` error
+- Service fails to start
+- Port already in use
+- Permission denied errors
+- Health check failures
+- Module import errors
+- And more...
 
 ## Performance Tuning
 

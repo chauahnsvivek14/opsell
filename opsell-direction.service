@@ -3,17 +3,19 @@ Description=Market Direction Classifier Microservice
 After=network.target
 
 [Service]
-Type=notify
+Type=simple
 User=ubuntu
 Group=ubuntu
 WorkingDirectory=/opt/opsell
 Environment="SERVICE_HOST=0.0.0.0"
 Environment="SERVICE_PORT=8000"
 Environment="SERVICE_WORKERS=4"
+Environment="PYTHONPATH=/opt/opsell"
 
 # Python virtual environment
 Environment="PATH=/opt/opsell/venv/bin:$PATH"
 ExecStart=/opt/opsell/venv/bin/gunicorn \
+    --chdir /opt/opsell \
     --workers 4 \
     --worker-class uvicorn.workers.UvicornWorker \
     --bind 0.0.0.0:8000 \
